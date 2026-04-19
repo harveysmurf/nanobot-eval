@@ -2,14 +2,18 @@
 """
 Nanobot Eval Runner.
 
-Builds a Docker image from a git revision, runs prompts against it,
-captures responses, and outputs results for scoring.
-
 Usage:
-    python3 run_eval.py --sha <git-sha>
-    python3 run_eval.py --sha af16a35  # Use specific commit
-    python3 run_eval.py --latest       # Use current HEAD
-    python3 run_eval.py --branch main  # Use latest on branch
+    # Use local nanobot source
+    python3 run_eval.py --nanobot-dir /path/to/nanobot -o results.json
+
+    # Use git revision
+    python3 run_eval.py --nanobot-url https://github.com/HKUDS/nanobot --sha abc123
+
+    # With custom prompts
+    python3 run_eval.py --nanobot-dir /path/to/nanobot --prompts custom.jsonl
+
+    # Skip Docker rebuild (use cached image)
+    python3 run_eval.py --nanobot-dir /path/to/nanobot --no-rebuild
 """
 
 import argparse
@@ -18,9 +22,12 @@ import shutil
 import subprocess
 import sys
 import time
+import os
+import tempfile
+import hashlib
 from pathlib import Path
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # Configuration
@@ -29,22 +36,24 @@ CONTAINER_NAME_PREFIX = "nanobot-eval"
 WORKSPACE_DIR = Path(__file__).parent
 PROMPTS_FILE = WORKSPACE_DIR / "prompts.jsonl"
 RESULTS_DIR = WORKSPACE_DIR / "results"
-EVAL_DIR = Path(__file__).parent
 DEFAULT_TIMEOUT = 60  # seconds per prompt
 
 
 @dataclass
 class EvalConfig:
-    git_sha: str
+    """Evaluation configuration."""
+    nanobot_dir: Path
+    nanobot_sha: str
     image_tag: str
-    container_name: str
     results_file: Path
     timeout: int
     model: str
     api_key: Optional[str] = None
+    rebuild: bool = True
 
 
-def run_cmd(cmd: list[str], check: bool = True, capture: bool = True, timeout: int = 60, binary: bool = False) -> subprocess.CompletedProcess:
+def run_cmd(cmd: list[str], check: bool = True, capture: bool = True, 
+            timeout: int = 60, binary: bool = False) -> subprocess.CompletedProcess:
     """Run a shell command."""
     result = subprocess.run(
         cmd,
@@ -60,22 +69,41 @@ def run_cmd(cmd: list[str], check: bool = True, capture: bool = True, timeout: i
 
 
 def get_api_key() -> Optional[str]:
-    """Get OpenAI API key from credentials."""
+    """Get OpenAI API key from environment or config."""
+    # First check environment
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        return api_key
+    
+    # Then check nanobot config
     try:
-        result = subprocess.run(
-            ["python3", "-c", 
-             "from nanobot.credentials import get; print(get('OPENAI_API_KEY') or '')"
-            ],
-            capture_output=True, text=True, timeout=10
-        )
-        return result.stdout.strip() or None
+        config_path = Path.home() / ".nanobot" / "config.json"
+        if config_path.exists():
+            import json
+            with open(config_path) as f:
+                config = json.load(f)
+                return config.get("api_key", config.get("OPENAI_API_KEY"))
     except:
-        return None
+        pass
+    return None
 
 
-def build_image(git_sha: str, dockerfile: Path) -> str:
-    """Build Docker image from git revision."""
-    image_tag = f"{IMAGE_NAME}:{git_sha[:8]}"
+def get_nanobot_sha(nanobot_dir: Path) -> str:
+    """Get current git SHA of nanobot directory."""
+    result = run_cmd(["git", "-C", str(nanobot_dir), "rev-parse", "HEAD"], capture=True)
+    return result.stdout.strip()
+
+
+def get_nanobot_url(nanobot_dir: Path) -> str:
+    """Get remote URL of nanobot directory."""
+    result = run_cmd(["git", "-C", str(nanobot_dir), "remote", "get-url", "origin"], capture=True)
+    return result.stdout.strip()
+
+
+def build_image(config: EvalConfig, dockerfile: Path) -> str:
+    """Build Docker image from nanobot source."""
+    nanobot_dir = config.nanobot_dir
+    image_tag = config.image_tag
     
     # Create temp build context
     build_dir = Path("/tmp/nanobot-eval-build")
@@ -86,98 +114,59 @@ def build_image(git_sha: str, dockerfile: Path) -> str:
     # Copy Dockerfile
     (build_dir / "Dockerfile").write_bytes(dockerfile.read_bytes())
     
-    # Copy eval directory (for LCM seed)
-    eval_src = EVAL_DIR
+    # Copy eval directory
+    eval_src = WORKSPACE_DIR
     eval_dest = build_dir / "eval"
     shutil.copytree(eval_src, eval_dest, ignore=shutil.ignore_patterns("results", "__pycache__", "*.pyc"))
     
-    # Also keep Python scripts we need
-    (eval_dest / "seed_lcm.py").write_text((eval_src / "seed_lcm.py").read_text())
-    
-    # Get nanobot source from git
-    result = run_cmd(["git", "archive", git_sha, "--prefix=source/"], capture=True, binary=True)
-    tar_path = build_dir / "source.tar"
-    tar_path.write_bytes(result.stdout if isinstance(result.stdout, bytes) else result.stdout.encode())
-    
-    # Extract tar to temp location first
-    source_dir = build_dir / "source"
-    if source_dir.exists():
-        shutil.rmtree(source_dir)
-    
-    run_cmd(["tar", "-xf", str(tar_path), "-C", str(build_dir)], check=True)
-    tar_path.unlink()
-    
-    # Move source/* contents to build_dir root (so we have nanobot/, bridge/, etc.)
-    for item in source_dir.iterdir():
-        dest = build_dir / item.name
-        if dest.exists():
-            if dest.is_dir():
-                shutil.rmtree(dest)
-            else:
-                dest.unlink()
-        shutil.move(str(item), str(dest))
-    source_dir.rmdir()
-    
-    # Get root files from git (already included in archive, but ensure we have latest)
-    for f in ["pyproject.toml", "README.md", "LICENSE"]:
-        try:
-            result = run_cmd(["git", "show", f"{git_sha}:{f}"], capture=True)
-            if result.returncode == 0:
-                (build_dir / f).write_text(result.stdout)
-        except:
-            pass
-    
-    # Generate LCM seed SQL first
-    print("  Generating LCM seed data...")
-    subprocess.run([sys.executable, str(eval_src / "seed_lcm.py")], check=True)
-    seed_sql = eval_src / "lcm_seed.sql"
-    if seed_sql.exists():
-        shutil.copy(seed_sql, eval_dest / "lcm_seed.sql")
+    # Copy nanobot source
+    nanobot_dest = build_dir / "nanobot"
+    shutil.copytree(nanobot_dir, nanobot_dest, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
     
     print(f"Building Docker image: {image_tag}")
-    
-    # Build image
     result = run_cmd([
         "docker", "build", "-t", image_tag, "-f", str(dockerfile),
         str(build_dir)
     ], timeout=300)
     
     if result.returncode != 0:
-        print(f"Docker build failed: {result.stderr}")
+        print(f"Docker build failed:\n{result.stderr}")
         sys.exit(1)
     
     print(f"✅ Image built: {image_tag}")
     return image_tag
 
 
-def run_prompt(image_tag: str, container_name: str, prompt: str, timeout: int = DEFAULT_TIMEOUT) -> tuple[str, float]:
+def run_prompt(image_tag: str, container_name: str, prompt: str, 
+               api_key: Optional[str], timeout: int = DEFAULT_TIMEOUT) -> tuple[str, float]:
     """Run a single prompt in the container."""
     start = time.time()
     
-    # Run nanobot agent with the prompt (escape for shell)
+    # Escape prompt for shell
     safe_prompt = prompt.replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
     
-    # Mount config (read-only) to provide API credentials
-    config_path = Path.home() / ".nanobot" / "config.json"
-    
-    result = run_cmd([
+    cmd = [
         "docker", "run", "--rm", "--name", container_name,
-        "-v", f"{config_path}:/root/.nanobot/config.json:ro",
-        image_tag,
-        "agent", "-m", safe_prompt
-    ], timeout=timeout)
+        "-e", f"OPENAI_API_KEY={api_key}" if api_key else "",
+    ]
     
+    # Remove empty env var if no key
+    if not api_key:
+        cmd.pop()
+    
+    cmd.extend([image_tag, "agent", "-m", safe_prompt])
+    
+    result = run_cmd(cmd, timeout=timeout)
     elapsed = time.time() - start
     return result.stdout.strip(), elapsed
 
 
 def run_eval(config: EvalConfig) -> dict:
     """Run full evaluation."""
-    git_sha = config.git_sha
     results = []
     
-    print(f"🚀 Starting eval for git revision: {git_sha}")
-    print(f"   Results will go to: {config.results_file}")
+    print(f"🚀 Eval for nanobot @ {config.nanobot_sha}")
+    print(f"   Results: {config.results_file}")
     print()
     
     # Load prompts
@@ -190,9 +179,12 @@ def run_eval(config: EvalConfig) -> dict:
     print(f"📋 Loaded {len(prompts)} prompts")
     print()
     
-    # Build Docker image
-    dockerfile = Path(__file__).parent / "Dockerfile"
-    image_tag = build_image(git_sha, dockerfile)
+    # Build or load image
+    dockerfile = WORKSPACE_DIR / "Dockerfile"
+    if config.rebuild:
+        build_image(config, dockerfile)
+    else:
+        print(f"Using cached image: {config.image_tag}")
     
     # Run each prompt
     for i, item in enumerate(prompts):
@@ -200,12 +192,15 @@ def run_eval(config: EvalConfig) -> dict:
         prompt_text = item["prompt"]
         category = item.get("category", "unknown")
         
-        container_name = f"{CONTAINER_NAME_PREFIX}-{git_sha[:8]}-{i}"
+        container_name = f"{CONTAINER_NAME_PREFIX}-{config.nanobot_sha[:8]}-{i}"
         
         print(f"[{i+1}/{len(prompts)}] {prompt_id}...", end=" ", flush=True)
         
         try:
-            response, elapsed = run_prompt(config.image_tag, container_name, prompt_text, timeout=config.timeout)
+            response, elapsed = run_prompt(
+                config.image_tag, container_name, prompt_text,
+                config.api_key, timeout=config.timeout
+            )
             success = True
             error = None
         except subprocess.TimeoutExpired:
@@ -231,7 +226,7 @@ def run_eval(config: EvalConfig) -> dict:
             "success": success,
             "error": error,
             "elapsed_seconds": round(elapsed, 2),
-            "git_sha": git_sha,
+            "nanobot_sha": config.nanobot_sha,
             "timestamp": datetime.now().isoformat(),
         }
         results.append(result)
@@ -241,15 +236,14 @@ def run_eval(config: EvalConfig) -> dict:
         else:
             print(f"❌ {error}")
         
-        # Small delay between prompts
         time.sleep(0.5)
     
     # Save results
-    config.results_file.parent.mkdir(exist_ok=True)
+    config.results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(config.results_file, "w") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     
-    # Print summary
+    # Summary
     success_count = sum(1 for r in results if r["success"])
     print()
     print(f"✅ Eval complete!")
@@ -269,52 +263,90 @@ def cleanup_containers(prefix: str = CONTAINER_NAME_PREFIX):
         ["docker", "ps", "-a", "--filter", f"name={prefix}", "-q"],
         capture_output=True, text=True
     )
-    container_ids = result.stdout.strip().split("\n")
-    for cid in container_ids:
+    for cid in result.stdout.strip().split("\n"):
         if cid:
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Nanobot Eval Runner")
-    parser.add_argument("--sha", help="Git SHA to evaluate")
-    parser.add_argument("--latest", action="store_true", help="Use current HEAD")
-    parser.add_argument("--branch", default="main", help="Branch to use")
-    parser.add_argument("-t", "--timeout", type=int, default=DEFAULT_TIMEOUT, help="Timeout per prompt")
+    parser.add_argument("--nanobot-dir", type=Path, help="Path to nanobot source")
+    parser.add_argument("--nanobot-url", help="Git URL for nanobot (clone if no dir)")
+    parser.add_argument("--sha", help="Git SHA (default: current HEAD)")
+    parser.add_argument("--branch", default="main", help="Branch for --nanobot-url")
+    parser.add_argument("--prompts", type=Path, help="Custom prompts file")
+    parser.add_argument("-t", "--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("-o", "--output", help="Output file path")
+    parser.add_argument("--no-rebuild", action="store_true", help="Use cached image")
     parser.add_argument("--cleanup", action="store_true", help="Clean up containers first")
     
     args = parser.parse_args()
     
-    # Determine git revision
-    if args.sha:
-        git_sha = args.sha
-    elif args.latest:
-        result = run_cmd(["git", "rev-parse", "HEAD"], capture=True)
-        git_sha = result.stdout.strip()
-    else:
-        result = run_cmd(["git", "rev-parse", args.branch], capture=True)
-        git_sha = result.stdout.strip()
+    # Resolve nanobot source
+    nanobot_dir = None
+    nanobot_sha = "local"
     
-    print(f"Git revision: {git_sha}")
+    if args.nanobot_dir:
+        nanobot_dir = args.nanobot_dir.resolve()
+        nanobot_sha = get_nanobot_sha(nanobot_dir)
+    elif args.nanobot_url:
+        clone_dir = Path(tempfile.mkdtemp(prefix="nanobot-clone-"))
+        run_cmd(["git", "clone", "--depth=1", "-b", args.branch, args.nanobot_url, str(clone_dir)])
+        nanobot_dir = clone_dir
+        if args.sha:
+            run_cmd(["git", "-C", str(clone_dir), "checkout", args.sha])
+            nanobot_sha = args.sha
+        else:
+            nanobot_sha = get_nanobot_sha(nanobot_dir)
+    else:
+        # Try to find nanobot in common locations
+        for candidate in [
+            Path.home() / "nanobot",
+            Path.home() / "nanobot-dev",
+            Path("/home/simo/nanobot"),
+            Path("/home/simo/nanobot-dev"),
+        ]:
+            if candidate.exists() and (candidate / "nanobot").exists():
+                nanobot_dir = candidate
+                nanobot_sha = get_nanobot_sha(nanobot_dir)
+                break
+        
+        if not nanobot_dir:
+            print("Error: No nanobot source found.")
+            print("Use --nanobot-dir or --nanobot-url to specify location.")
+            sys.exit(1)
+    
+    print(f"Using nanobot from: {nanobot_dir}")
+    print(f"Git SHA: {nanobot_sha}")
+    
+    # Get API key
+    api_key = get_api_key()
+    if not api_key:
+        print("Warning: No API key found (set OPENAI_API_KEY env var)")
     
     # Setup output path
-    output_path = Path(args.output) if args.output else RESULTS_DIR / f"{git_sha[:8]}.json"
+    output_path = Path(args.output) if args.output else RESULTS_DIR / f"{nanobot_sha[:8]}.json"
     
     # Cleanup if requested
     if args.cleanup:
         cleanup_containers()
     
-    # Run eval
+    # Create config
     config = EvalConfig(
-        git_sha=git_sha,
-        image_tag=f"{IMAGE_NAME}:{git_sha[:8]}",
-        container_name=f"{CONTAINER_NAME_PREFIX}-{git_sha[:8]}",
+        nanobot_dir=nanobot_dir,
+        nanobot_sha=nanobot_sha,
+        image_tag=f"{IMAGE_NAME}:{nanobot_sha[:8]}",
         results_file=output_path,
         timeout=args.timeout,
         model="gpt-4o",
-        api_key=get_api_key(),
+        api_key=api_key,
+        rebuild=not args.no_rebuild,
     )
+    
+    # Override prompts file if specified
+    global PROMPTS_FILE
+    if args.prompts:
+        PROMPTS_FILE = args.prompts
     
     run_eval(config)
 

@@ -1,36 +1,52 @@
 # nanobot-eval
 
-Evaluation framework for nanobot AI assistant.
+Evaluation framework for nanobot AI assistant. Clone this repo, point at your nanobot source and run.
 
-## Setup
+## Quick Start
 
 ```bash
-# Install dependencies
-pip install openai tiktoken aiohttp pydantic
+# Clone this repo
+git clone https://github.com/harveysmurf/nanobot-eval.git
+cd nanobot-eval
 
-# Ensure nanobot repo is available locally
-cd /path/to/nanobot  # nanobot source code
+# Run with local nanobot source
+python3 run_eval.py --nanobot-dir /path/to/nanobot -o results.json
+
+# Run against a specific git revision (from remote repo)
+python3 run_eval.py --nanobot-url https://github.com/HKUDS/nanobot --sha abc123
 ```
+
+## Prerequisites
+
+- Docker installed and running
+- Python 3.10+
+- `OPENAI_API_KEY` environment variable set (or in `~/.nanobot/config.json`)
 
 ## Usage
 
 ```bash
-# Run full eval (23 prompts)
-python3 eval/run_eval.py --sha <git-sha> -o results.json
+# Use local nanobot source
+python3 run_eval.py --nanobot-dir ~/nanobot
 
-# Run specific prompts only
-# Edit PROMPTS_FILE in run_eval.py or create custom prompts.jsonl
+# Use git revision from remote repo
+python3 run_eval.py --nanobot-url https://github.com/HKUDS/nanobot --sha main
 
-# Run with custom timeout per prompt
-python3 eval/run_eval.py --sha <git-sha> -t 120
+# Custom timeout per prompt (default: 60s)
+python3 run_eval.py --nanobot-dir ~/nanobot -t 120
+
+# Use custom prompts file
+python3 run_eval.py --nanobot-dir ~/nanobot --prompts my_prompts.jsonl
+
+# Skip Docker rebuild (use cached image)
+python3 run_eval.py --nanobot-dir ~/nanobot --no-rebuild
 ```
 
-## How it works
+## How It Works
 
-1. Builds Docker image from nanobot source + seed LCM data
-2. Runs each prompt in isolated container
-3. Captures response and timing
-4. Saves results to JSON
+1. **Build**: Copies nanobot source + eval scripts into Docker image
+2. **Seed**: Initializes LCM database with seed data (context, conversations, memory)
+3. **Run**: Each prompt runs in isolated container with seed memory
+4. **Score**: Use `scorer.py` to evaluate response quality
 
 ## Prompt Format
 
@@ -38,20 +54,31 @@ python3 eval/run_eval.py --sha <git-sha> -t 120
 {"id": "unique_id", "prompt": "Your prompt here", "lang": "en", "category": "basic"}
 ```
 
-## Adding New Prompts
+## Adding Prompts
 
-1. Add entry to `prompts.jsonl`
-2. Update categories as needed
-3. Re-run eval
+Edit `prompts.jsonl` or create your own file:
 
-## Scoring
-
-Use `scorer.py` to evaluate response quality:
-
-```bash
-python3 scorer.py results.json
+```jsonl
+{"id": "my_test_01", "prompt": "Hello!", "lang": "en", "category": "greeting"}
+{"id": "my_test_02", "prompt": "Какво ще обядваме?", "lang": "bg", "category": "food"}
 ```
 
 ## Credentials
 
-API credentials are loaded from `~/.nanobot/config.json` and mounted into the Docker container at runtime. No secrets are stored in the repo.
+API key loaded from (in order of priority):
+1. `OPENAI_API_KEY` environment variable
+2. `~/.nanobot/config.json` → `api_key`
+
+No secrets are stored in this repo. Results are saved locally (gitignored).
+
+## Project Structure
+
+```
+nanobot-eval/
+├── run_eval.py      # Main evaluation runner
+├── scorer.py        # Response quality scorer
+├── prompts.jsonl    # Test prompts
+├── lcm_seed.sql     # Seed data for LCM database
+├── Dockerfile      # Container image definition
+└── README.md
+```

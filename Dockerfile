@@ -28,12 +28,15 @@ RUN mkdir -p /root/.nanobot/lcm
 # Copy LCM seed data
 COPY eval/lcm_seed.sql /tmp/lcm_seed.sql
 
+# Create eval workspace
+RUN mkdir -p /root/.nanobot/lcm
+
 # Create entrypoint script
 RUN echo '#!/bin/bash' > /entrypoint.sh && \
     echo 'set -e' >> /entrypoint.sh && \
     echo 'if [ ! -f /root/.nanobot/lcm/lcm.db ]; then' >> /entrypoint.sh && \
     echo '    echo "Initializing LCM with seed data..."' >> /entrypoint.sh && \
-    echo '    sqlite3 /root/.nanobot/lcm/lcm.db < /tmp/lcm_seed.sql' >> /entrypoint.sh && \
+    echo '    sqlite3 /root/.nanobot/lcm/lcm.db < /app/eval/lcm_seed.sql' >> /entrypoint.sh && \
     echo '    sqlite3 /root/.nanobot/lcm/lcm.db "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=rowid); INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages;"' >> /entrypoint.sh && \
     echo '    sqlite3 /root/.nanobot/lcm/lcm.db "CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(content, content=summaries, content_rowid=rowid); INSERT INTO summaries_fts(rowid, content) SELECT rowid, content FROM summaries;"' >> /entrypoint.sh && \
     echo '    chmod 644 /root/.nanobot/lcm/lcm.db' >> /entrypoint.sh && \
