@@ -1,0 +1,19 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE
+.vscode/
+.idea/
+
+# Eval results (contain real API responses)
+results/
+*.json
+
+# Docker
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
