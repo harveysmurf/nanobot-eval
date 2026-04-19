@@ -1,0 +1,10 @@
+{"id": "greeting_01", "prompt": "Hello!", "lang": "en", "category": "basic", "description": "Simple greeting"}
+{"id": "greeting_02", "prompt": "Здравей!", "lang": "bg", "category": "basic", "description": "Simple Bulgarian greeting"}
+{"id": "greeting_03", "prompt": "Как върви животът?", "lang": "bg", "category": "basic", "description": "Bulgarian casual question"}
+{"id": "calc_01", "prompt": "What is 42 + 58?", "lang": "en", "category": "math", "description": "Simple arithmetic"}
+{"id": "calc_02", "prompt": "Колко е 17 по 23?", "lang": "bg", "category": "math", "description": "Bulgarian multiplication"}
+{"id": "format_01", "prompt": "Give me a numbered list of 5 fruits", "lang": "en", "category": "format", "description": "List format check"}
+{"id": "format_02", "prompt": "What is the capital of France? Answer in exactly one sentence.", "lang": "en", "category": "format", "description": "Format constraint"}
+{"id": "code_01", "prompt": "Write a Python function that checks if a number is prime", "lang": "en", "category": "code", "description": "Code generation"}
+{"id": "code_02", "prompt": "Explain what this regex does: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", "lang": "en", "category": "code", "description": "Regex explanation"}
+{"id": "long_01", "prompt": "Explain quantum computing in detail, covering qubits, superposition, entanglement, and potential applications", "lang": "en", "category": "long", "description": "Long-form explanation", "timeout": 120}

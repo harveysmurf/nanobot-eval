@@ -1,19 +1,14 @@
-# Byte-compiled / optimized files
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.db
 
-# IDE
-.vscode/
-.idea/
+# Results (only baseline is committed)
+results/*.json
+results/**/*.json
+!baseline_scored.json
 
-# Eval results (contain real API responses)
-results/
-*.json
+# Merged config contains secrets
+config/merged_config.json
 
-# Docker
-.dockerignore
-
-# OS
 .DS_Store
-Thumbs.db

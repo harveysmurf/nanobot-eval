@@ -1,47 +1,33 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# Install only what's needed for eval
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git sqlite3 && \
-    apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy all source
 COPY nanobot/ nanobot/
 COPY pyproject.toml README.md LICENSE ./
 
-# Remove bridge force-include from pyproject.toml (not needed for eval)
+# Remove bridge (not needed for eval)
 RUN sed -i '/"bridge".*"nanobot\/bridge"/d' pyproject.toml && \
     sed -i '/force-include/d' pyproject.toml
 
-# Install all dependencies
 RUN uv pip install --system --no-cache .
 
-# Copy source again (overwrites installed)
+# Overwrite with source (in case install clobbered anything)
 COPY nanobot/ nanobot/
 
-# Create eval workspace
-RUN mkdir -p /root/.nanobot/lcm
+# Workspace structure
+RUN mkdir -p /root/.nanobot/lcm /root/.nanobot/credentials
 
-# Copy LCM seed data
-COPY eval/lcm_seed.sql /tmp/lcm_seed.sql
+# LCM seed data (SQL loaded by entrypoint)
+COPY eval/fixtures/lcm_seed.sql /tmp/lcm_seed.sql
 
-# Create eval workspace
-RUN mkdir -p /root/.nanobot/lcm
+# Pre-baked config — merge_config.py already injected secrets at build time
+COPY eval/config/merged_config.json /root/.nanobot/config.json
 
-# Create entrypoint script
-RUN echo '#!/bin/bash' > /entrypoint.sh && \
-    echo 'set -e' >> /entrypoint.sh && \
-    echo 'if [ ! -f /root/.nanobot/lcm/lcm.db ]; then' >> /entrypoint.sh && \
-    echo '    echo "Initializing LCM with seed data..."' >> /entrypoint.sh && \
-    echo '    sqlite3 /root/.nanobot/lcm/lcm.db < /app/eval/lcm_seed.sql' >> /entrypoint.sh && \
-    echo '    sqlite3 /root/.nanobot/lcm/lcm.db "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=rowid); INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages;"' >> /entrypoint.sh && \
-    echo '    sqlite3 /root/.nanobot/lcm/lcm.db "CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(content, content=summaries, content_rowid=rowid); INSERT INTO summaries_fts(rowid, content) SELECT rowid, content FROM summaries;"' >> /entrypoint.sh && \
-    echo '    chmod 644 /root/.nanobot/lcm/lcm.db' >> /entrypoint.sh && \
-    echo 'fi' >> /entrypoint.sh && \
-    echo 'exec python3 -m nanobot "$@"' >> /entrypoint.sh && \
-    chmod +x /entrypoint.sh
+COPY eval/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

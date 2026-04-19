@@ -1,0 +1,6 @@
+{"id": "tool_01", "prompt": "Search the web for latest AI news", "lang": "en", "category": "tool", "description": "Web search", "timeout": 90}
+{"id": "tool_02", "prompt": "Check the current time in Tokyo", "lang": "en", "category": "tool", "description": "Time zone query"}
+{"id": "tool_03", "prompt": "What's the weather in Sofia?", "lang": "en", "category": "tool", "description": "Weather query", "timeout": 90}
+{"id": "tool_04", "prompt": "Каква е времето в София?", "lang": "bg", "category": "tool", "description": "Bulgarian weather query", "timeout": 90}
+{"id": "skill_01", "prompt": "List all your available skills", "lang": "en", "category": "skills", "description": "List skills"}
+{"id": "skill_02", "prompt": "Какво можеш да правиш?", "lang": "bg", "category": "skills", "description": "Bulgarian capabilities query"}

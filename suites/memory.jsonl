@@ -1,0 +1,5 @@
+{"id": "memory_01", "prompt": "What do you remember about our previous conversations?", "lang": "en", "category": "memory", "description": "Memory recall", "expected_keywords": ["home automation", "water filter", "Simo"]}
+{"id": "memory_02", "prompt": "Who am I? What do you know about me?", "lang": "en", "category": "memory", "description": "User identity from memory", "expected_keywords": ["Simo", "Sofia"]}
+{"id": "memory_03", "prompt": "What projects have we discussed?", "lang": "en", "category": "memory", "description": "Project recall from memory", "expected_keywords": ["home automation", "nanobot"]}
+{"id": "memory_04", "prompt": "When should I replace my water filter filters?", "lang": "en", "category": "memory", "description": "Specific appliance memory test", "expected_keywords": ["September", "2026", "K2", "K5"]}
+{"id": "memory_05", "prompt": "What automation did we write for the porch light?", "lang": "en", "category": "memory", "description": "Specific conversation recall", "expected_keywords": ["sunset", "porch", "light"]}
